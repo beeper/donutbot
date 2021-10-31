@@ -1,0 +1,7 @@
+maubot: 0.1.0
+id: net.hyperflux.donutbot
+version: 1.0.0
+license: MIT
+modules:
+  - donutbot
+main_class: DonutBot
