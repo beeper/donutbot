@@ -1,10 +1,14 @@
+from logging import warn
 from math import floor
 import random
-from typing import Dict, FrozenSet, List, NamedTuple, NewType, Set, Union, Optional
+from attr import dataclass
+from typing import Dict, FrozenSet, List, NamedTuple, NewType, Optional, Set, Union
 
 from maubot import MessageEvent, Plugin
-from maubot.handlers import command, event
-from mautrix.types import RoomID, StateEvent, EventType, GenericEvent
+from maubot.handlers import command
+from mautrix.errors import MNotFound
+from mautrix.types import EventType, RoomID, StateEvent, StateEventContent, SerializableAttrs, Obj, Lst, MessageType
+from mautrix.types.event.message import TextMessageEventContent
 
 class SimpleMember(NamedTuple):
     display_name: str
@@ -12,8 +16,13 @@ class SimpleMember(NamedTuple):
 
 Donut = NewType("Donut", Set[FrozenSet[SimpleMember]])
 
-old_donut_state_event = EventType.find("net.hyperflux.donutbot.old_donut",
-                              t_class=EventType.Class.STATE)
+donut_state_event = EventType.find("net.hyperflux.donutbot.donut_state",
+                                        t_class=EventType.Class.STATE)
+
+@dataclass
+class DonutStateEventContent(SerializableAttrs):
+    last_donut: Donut
+    current_donut: Donut
 
 def _str_to_int(s: str) -> Union[int, None]:
     try:
@@ -24,6 +33,8 @@ def _str_to_int(s: str) -> Union[int, None]:
 class DonutBot(Plugin):
     proposed_donuts: Dict[RoomID, Donut] = dict()
 
+    #### Getting and setting Matrix room state ####
+
     async def get_members(self, evt: MessageEvent) -> List[SimpleMember]:
         room_id = evt.room_id
         new_members = await evt.client.get_members(room_id)
@@ -32,8 +43,41 @@ class DonutBot(Plugin):
         simple_members = [state_event_to_simple_member(s) for s in new_members if s.state_key != evt.client.mxid]
         return simple_members
 
+    async def get_donut_state(self, room_id: RoomID) -> Union[StateEventContent, None]:
+        try:
+            return await self.client.get_state_event(room_id, donut_state_event)
+        except MNotFound:
+            return None
+
     async def get_last_donut(self, room_id: RoomID) -> Optional[Donut]:
+        donut_state = await self.get_donut_state(room_id)
+        if (donut_state and isinstance(donut_state, Obj)):
+            last_donut = donut_state.get("last_donut")
+            if last_donut:
+                return _json_to_donut(last_donut)
         return None
+
+    async def get_current_donut(self, room_id: RoomID) -> Optional[Donut]:
+        donut_state = await self.get_donut_state(room_id)
+        if (donut_state and isinstance(donut_state, Obj)):
+            current_donut = donut_state.get("current_donut")
+            if current_donut:
+                return _json_to_donut(current_donut)
+        return None
+
+    async def set_current_donut(self, donut: Donut, room_id: RoomID):
+        donut_state = await self.get_donut_state(room_id)
+        if not donut_state:
+            donut_state = Obj()
+        old_donut = await self.get_current_donut(room_id)
+        if old_donut:
+            donut_state["last_donut"] = _donut_to_json(old_donut)
+        donut_state["current_donut"] = _donut_to_json(donut)
+        await self.client.send_state_event(room_id=room_id, 
+                                           event_type=donut_state_event, 
+                                           content=donut_state)
+
+    #### Bot Commands ####
 
     @command.new(name="donut", require_subcommand=True)
     async def base_command(self):
@@ -60,7 +104,21 @@ class DonutBot(Plugin):
                     new_donut = _generate_donut(await self.get_members(evt), group_size)
                     break
         self.proposed_donuts[room_id] = new_donut
-        await evt.respond(_format_donut(new_donut, "New PROPOSED Donut: (`!donut confirm` to confirm)"))
+        await evt.respond(_format_donut(new_donut, "New PROPOSED DONUT: (`!donut confirm` to confirm)"))
+
+    @base_command.subcommand(help="Confirm new DONUT")
+    async def confirm(self, evt: MessageEvent) -> None:
+        room_id = evt.room_id
+        proposed_donut = self.proposed_donuts.get(room_id)
+        if (proposed_donut):
+            try:
+                await self.set_current_donut(proposed_donut, room_id)
+            except Exception as e:
+                await evt.respond("Error saving state: " + str(e))
+                return
+            await evt.respond(_format_donut(proposed_donut, "Newly proposed DONUT SAVED!"))
+        else:
+            await evt.respond("No DONUT currently proposed. Use `!donut new` to make a new one")
 
     @base_command.subcommand(help="Generate a sample DONUT")
     @command.argument("group_size", required=False, parser=_str_to_int)
@@ -80,6 +138,28 @@ class DonutBot(Plugin):
         await evt.respond(_format_donut(d1))
         await evt.respond(_format_donut(d2))
         await evt.respond(str(overlap))
+
+def _json_to_donut(jsonDonut: Lst) -> Donut:
+    newDonut = Donut(set())
+    for jsonGroup in jsonDonut:
+        newGroup: Set[SimpleMember] = set()
+        for jsonMember in jsonGroup:
+            newMember = SimpleMember(jsonMember.display_name, jsonMember.mxid)
+            newGroup.add(newMember)
+        newDonut.add(frozenset(newGroup))
+    return newDonut
+
+def _donut_to_json(donut: Donut) -> Lst:
+    newJsonDonut: List[List[Obj]] = list()
+    for group in donut:
+        newJsonGroup: List[Obj] = list()
+        for member in group:
+            newJsonMember = Obj()
+            newJsonMember["display_name"] = member.display_name
+            newJsonMember["mxid"] = member.mxid
+            newJsonGroup.append(newJsonMember)
+        newJsonDonut.append(newJsonGroup)
+    return Lst(newJsonDonut)
 
 def _generate_donut(member_list: List[SimpleMember], group_size: int) -> Donut:
     random_list = member_list.copy()
