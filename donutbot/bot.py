@@ -120,6 +120,22 @@ class DonutBot(Plugin):
         else:
             await evt.respond("No DONUT currently proposed. Use `!donut new` to make a new one")
 
+    @base_command.subcommand(help="View the current DONUT")
+    async def current(self, evt: MessageEvent) -> None:
+        d = await self.get_current_donut(evt.room_id)
+        if d:
+            await evt.respond(_format_donut(d))
+        else:
+            await evt.respond("No DONUT in progress. Use `!donut new` to make a new one")
+
+    @base_command.subcommand(help="View the previous DONUT")
+    async def previous(self, evt: MessageEvent) -> None:
+        d = await self.get_last_donut(evt.room_id)
+        if d:
+            await evt.respond(_format_donut(d))
+        else:
+            await evt.respond("No previous DONUT. Use `!donut new` to make a new one")
+
     @base_command.subcommand(help="Generate a sample DONUT")
     @command.argument("group_size", required=False, parser=_str_to_int)
     async def sample(self, evt: MessageEvent, group_size: Union[int, None] = None) -> None:
