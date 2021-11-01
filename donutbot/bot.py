@@ -1,14 +1,14 @@
-from logging import warn
+from logging import warn, info
 from math import floor
 import random
 from attr import dataclass
-from typing import Dict, FrozenSet, List, NamedTuple, NewType, Optional, Set, Union
+from datetime import date
+from typing import Dict, FrozenSet, List, NamedTuple, NewType, Optional, Set, Union, Any
 
 from maubot import MessageEvent, Plugin
 from maubot.handlers import command
 from mautrix.errors import MNotFound
-from mautrix.types import EventType, RoomID, StateEvent, StateEventContent, SerializableAttrs, Obj, Lst, MessageType
-from mautrix.types.event.message import TextMessageEventContent
+from mautrix.types import EventType, RoomID, UserID, StateEvent, StateEventContent, SerializableAttrs, Obj, Lst
 
 class SimpleMember(NamedTuple):
     display_name: str
@@ -77,6 +77,23 @@ class DonutBot(Plugin):
                                            event_type=donut_state_event, 
                                            content=donut_state)
 
+    async def invite_users_to_donut(self, donut: Donut):
+        for group in donut:
+            invitees = [UserID(m.mxid) for m in group]
+            room_name = "DONUT! " + date.today().strftime("%B %d, %Y")
+            initial_state: List[Dict[str, Any]] = [{
+                "content": {"history_visibility": "invited"}, 
+                "type": "m.room.history_visibility",
+                "state_key": "",
+            }]
+            new_room_id = await self.client.create_room(
+                name=room_name, 
+                invitees=invitees, 
+                initial_state=initial_state, # type: ignore
+            )
+            self.client.send_text(new_room_id, "Welcome to DONUT! Please use this room to coordinate a friendly chat and the consumption of doughnuts!!!")
+            info("Users " + str(invitees) + " invited to room " + new_room_id)
+
     #### Bot Commands ####
 
     @command.new(name="donut", require_subcommand=True)
@@ -113,10 +130,21 @@ class DonutBot(Plugin):
         if (proposed_donut):
             try:
                 await self.set_current_donut(proposed_donut, room_id)
+                info("New DONUT saved for room_id: " + room_id);
             except Exception as e:
                 await evt.respond("Error saving state: " + str(e))
+                warn("Error saving DONUT for room_id " + room_id, e);
                 return
-            await evt.respond(_format_donut(proposed_donut, "Newly proposed DONUT SAVED!"))
+            await evt.respond(_format_donut(proposed_donut, "Newly proposed DONUT created!"))
+            try:
+                await self.invite_users_to_donut(proposed_donut)
+                info("Everyone invited for DONUT in room_id: " + room_id);
+            except Exception as e:
+                await evt.respond("Error inviting everyone to DONUT: " + str(e))
+                warn("Error inviting everyone to DONUT for room_id " + room_id, e);
+                return
+            await evt.respond(_format_donut(proposed_donut, "Everyone invited to DONUT rooms!"))
+            self.proposed_donuts.pop(room_id)
         else:
             await evt.respond("No DONUT currently proposed. Use `!donut new` to make a new one")
 
@@ -142,18 +170,6 @@ class DonutBot(Plugin):
         group_size = group_size if group_size != None else 2
         d = _generate_donut(await self.get_members(evt), group_size)
         await evt.respond(_format_donut(d))
-
-    @base_command.subcommand(help="Test overlap")
-    @command.argument("group_size", required=False, parser=_str_to_int)
-    async def overlap(self, evt: MessageEvent, group_size: Union[int, None] = None) -> None:
-        group_size = group_size if group_size != None else 2
-        members = await self.get_members(evt)
-        d1 = _generate_donut(members, group_size)
-        d2 = _generate_donut(members, group_size)
-        overlap = _are_donuts_overlapping(d1, d2)
-        await evt.respond(_format_donut(d1))
-        await evt.respond(_format_donut(d2))
-        await evt.respond(str(overlap))
 
 def _json_to_donut(jsonDonut: Lst) -> Donut:
     newDonut = Donut(set())
