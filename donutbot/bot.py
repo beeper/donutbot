@@ -3,12 +3,17 @@ from math import floor
 import random
 from attr import dataclass
 from datetime import date
-from typing import Dict, FrozenSet, List, NamedTuple, NewType, Optional, Set, Union, Any
+from typing import Dict, FrozenSet, List, NamedTuple, NewType, Optional, Set, Union, Any, Tuple
 
 from maubot import MessageEvent, Plugin
 from maubot.handlers import command
-from mautrix.errors import MNotFound
-from mautrix.types import EventType, RoomID, UserID, StateEvent, StateEventContent, SerializableAttrs, Obj, Lst
+from mautrix.errors.request import MNotFound
+from mautrix.types.event.type import EventType
+from mautrix.types.primitive import RoomID, UserID
+from mautrix.types.users import Member
+from mautrix.types.event.state import StateEvent, StateEventContent
+from mautrix.types.util.serializable_attrs import SerializableAttrs
+from mautrix.types.util.obj import Obj, Lst
 
 class SimpleMember(NamedTuple):
     display_name: str
@@ -37,10 +42,10 @@ class DonutBot(Plugin):
 
     async def get_members(self, evt: MessageEvent) -> List[SimpleMember]:
         room_id = evt.room_id
-        new_members = await evt.client.get_members(room_id)
-        def state_event_to_simple_member(s: StateEvent) -> SimpleMember:
-            return SimpleMember(display_name=s.content.displayname, mxid=s.state_key) # type: ignore
-        simple_members = [state_event_to_simple_member(s) for s in new_members if s.state_key != evt.client.mxid]
+        new_members = (await evt.client.get_joined_members(room_id)).items()
+        def item_to_simple_member(i: Tuple[UserID, Member]) -> SimpleMember:
+            return SimpleMember(display_name=i[1].displayname, mxid=i[0]) # type: ignore
+        simple_members = [item_to_simple_member(i) for i in new_members if i[0] != evt.client.mxid]
         return simple_members
 
     async def get_donut_state(self, room_id: RoomID) -> Union[StateEventContent, None]:
