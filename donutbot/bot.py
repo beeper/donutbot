@@ -1,17 +1,19 @@
-from logging import warn, info
-from math import floor
+import asyncio
 import random
 from attr import dataclass
 from datetime import date
-from typing import Dict, FrozenSet, List, NamedTuple, NewType, Optional, Set, Union, Any, Tuple
+from logging import warn, info
+from math import floor
+from typing import Dict, FrozenSet, Iterable, List, NamedTuple, NewType, Optional, Set, Union, Any, Tuple
 
 from maubot import MessageEvent, Plugin
 from maubot.handlers import command
 from mautrix.errors.request import MNotFound
+from mautrix.types.event.encrypted import EncryptionAlgorithm
 from mautrix.types.event.type import EventType
 from mautrix.types.primitive import RoomID, UserID
 from mautrix.types.users import Member
-from mautrix.types.event.state import StateEvent, StateEventContent
+from mautrix.types.event.state import RoomEncryptionStateEventContent, StateEventContent
 from mautrix.types.util.serializable_attrs import SerializableAttrs
 from mautrix.types.util.obj import Obj, Lst
 
@@ -83,21 +85,34 @@ class DonutBot(Plugin):
                                            content=donut_state)
 
     async def invite_users_to_donut(self, donut: Donut):
-        for group in donut:
-            invitees = [UserID(m.mxid) for m in group]
-            room_name = "DONUT! " + date.today().strftime("%B %d, %Y")
-            initial_state: List[Dict[str, Any]] = [{
-                "content": {"history_visibility": "invited"}, 
-                "type": "m.room.history_visibility",
-                "state_key": "",
-            }]
-            new_room_id = await self.client.create_room(
-                name=room_name, 
-                invitees=invitees, 
-                initial_state=initial_state, # type: ignore
-            )
-            self.client.send_text(new_room_id, "Welcome to DONUT! Please use this room to coordinate a friendly chat and the consumption of doughnuts!!!")
-            info("Users " + str(invitees) + " invited to room " + new_room_id)
+        await asyncio.gather(*(self.create_donut_room(group) for group in donut))
+
+    async def create_donut_room(self, group: Iterable[SimpleMember]):
+        invitees = [UserID(m.mxid) for m in group]
+        room_name = "DONUT! {}".format(date.today().strftime("%B %d, %Y"))
+        initial_state: List[Dict[str, Any]] = [{
+            "content": {"history_visibility": "invited"}, 
+            "type": "m.room.history_visibility",
+            "state_key": "",
+        }]
+        new_room_id = await self.client.create_room(
+            name=room_name, 
+            invitees=invitees, 
+            initial_state=initial_state, # type: ignore
+        )
+        # Ensure the bot is in the room
+        await self.client.join_room(new_room_id)
+        await self.client.send_text(
+            new_room_id,
+            "Welcome to DONUT! Please use this room to coordinate a friendly chat and "
+            "the consumption of doughnuts!!!",
+        )
+        info(f"Users {invitees} invited to room {new_room_id}")
+        await self.client.send_state_event(
+            new_room_id,
+            EventType.ROOM_ENCRYPTION,
+            RoomEncryptionStateEventContent(EncryptionAlgorithm.MEGOLM_V1),
+        )
 
     #### Bot Commands ####
 
